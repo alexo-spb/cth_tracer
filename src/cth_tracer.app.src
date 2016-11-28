@@ -1,0 +1,10 @@
+{application, cth_tracer,
+ [{description, "Tracing Hook for Common Test"},
+  {vsn, "0.0.1"},
+  {registered, []},
+  {modules, [
+      cth_tracer,
+      cth_tracer_puml_format
+  ]},
+  {applications, [kernel, stdlib]},
+  {env, []}]}.
