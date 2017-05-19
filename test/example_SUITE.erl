@@ -26,13 +26,16 @@
 
 init_per_suite(Config) ->
     TracerConfig = [
-        {show_trace, all},
+        {format_opts, [
+            {out, "trace.puml"},
+            {handler, cth_tracer_puml_format:get_handler()}
+        ]},
         {modules, [
             module_a,
             {module_b, [trace_locals]}
         ]}
     ],
-    [{cth_tracer, TracerConfig}, {ct_hooks, [cth_tracer]} | Config].
+    [{ct_hooks, [cth_tracing]}, {cth_tracing, TracerConfig} | Config].
 
 end_per_suite(_Config) ->
     ok.

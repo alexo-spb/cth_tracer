@@ -4,7 +4,8 @@
   {registered, []},
   {modules, [
       cth_tracer,
-      cth_tracer_puml_format
+      cth_tracer_puml_format,
+      cth_tracing
   ]},
   {applications, [kernel, stdlib]},
   {env, []}]}.

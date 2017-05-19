@@ -15,8 +15,8 @@
 %%%============================================================================
 
 %%% @author Aleksei Osin
-%%% @copyright 2016 Aleksei Osin
-%%% @doc Tracing hook for CT
+%%% @copyright 2017 Aleksei Osin
+%%% @doc Tracer helper
 %%%
 %%% TODO: Add description
 %%%
@@ -26,134 +26,108 @@
 
 -module(cth_tracer).
 
+-record(state, {
+    procs,
+    flags,
+    trace_opts,
+    fetch_dir,
+    format_opts
+}).
 
-%% ct callbacks
+%% api
 -export([
-    id/1,
-    init/2,
-    pre_init_per_testcase/3,
-    post_end_per_testcase/4
+    new/1,
+    start/1,
+    stop/1,
+    attach_meck/1,
+    detach_meck/1
 ]).
 
+%% @doc Creates an opaque tracer handler.
+new(Config) ->
+    #state{
+        procs = get_config(procs, Config),
+        flags = get_config(flags, Config),
+        trace_opts = get_config(trace_opts, Config),
+        fetch_dir = get_config(fetch_dir, Config),
+        format_opts = get_config(format_opts, Config)
+    }.
 
--record(state, {}).
-
-
-%% @doc Provide a unique id for this CTH.
-id(_Opts) ->
-    ?MODULE.
-
-%% @doc Initiate a common state. Called before any other callback function.
-init(_Id, _Opts) ->
-    {ok, #state{}}.
-
-%% @doc Called before each test case.
-pre_init_per_testcase(_TC, Config, State) ->
-    case get_trace_opts(Config) of
-        [] ->
-            ok;
-        TraceOpts ->
-            case get_trace_mecked(Config) of
-                true ->
-                    meck:new(meck, [passthrough]),
-                    meck:expect(meck, expect, expect_3_fun(TraceOpts)),
-                    meck:expect(meck, expect, expect_4_fun(TraceOpts));
-                _ ->
-                    ok
-            end,
-            Procs = get_procs(Config),
-            Flags = get_flags(Config),
-            start_tracer(Procs, Flags, TraceOpts)
-    end,
-    {Config, State}.
-
-%% @doc Called after each test case.
-post_end_per_testcase(_TC, Config, Return, State) ->
-    case get_trace_opts(Config) of
-        [] ->
-            ok;
-        _TraceOpts ->
-            case get_trace_mecked(Config) of
-                true ->
-                    meck:unload(meck);
-                _ ->
-                    ok
-            end,
-            FormatOpts = get_format_opts(Config),
-            ShowTrace = get_show_trace(Config),
-            case {ShowTrace, Return} of
-                {failed, {error, _}} ->
-                    stop_tracer_and_format(FormatOpts);
-                {all, _} ->
-                    stop_tracer_and_format(FormatOpts);
-                _ ->
-                    stop_tracer()
-            end
-    end,
-    {Return, State}.
-
-get_show_trace(Config) ->
-    get_config(show_trace, Config, failed).
-
-get_procs(Config) ->
-    get_config(procs, Config, all).
-
-get_flags(Config) ->
-    get_config(flags, Config, [call]).
-
-get_trace_opts(Config) ->
-    Modules = get_config(modules, Config, []),
-    DefaultModTraceOpts = default_mod_trace_opts(Config),
-    [merge_trace_opts(Item, DefaultModTraceOpts) || Item <- Modules].
-
-default_mod_trace_opts(Config) ->
-    get_config(trace_opts, Config, []) ++
-        [{match_spec, [{'_', [], [{exception_trace}]}]}].
-
-merge_trace_opts(Item, DefaultModTraceOpts) ->
-    case Item of
-        {Mod, ModTraceOpts} ->
-            {Mod, ModTraceOpts ++ DefaultModTraceOpts};
-        Mod ->
-            {Mod, DefaultModTraceOpts}
-    end.
-
-get_format_opts(Config) ->
-    get_config(format_opts, Config, default_format_opts(Config)).
-
-get_trace_mecked(Config) ->
-    get_config(trace_mecked, Config, false).
-
-get_config(Key, Config, Default) ->
-    TracerConfig = proplists:get_value(cth_tracer, Config, []),
-    proplists:get_value(Key, TracerConfig, Default).
-
-default_format_opts(_Config) ->
-    [{handler, cth_tracer_puml_format:get_handler()}].
-
-start_tracer(Procs, Flags, TraceOpts) ->
+%% @doc Starts the tracer.
+start(State) ->
+    #state{procs = Procs, flags = Flags, trace_opts = TraceOpts} = State,
     ttb:tracer(),
     ttb:p(Procs, Flags),
-    [set_tracing(Mod, ModTraceOpts) || {Mod, ModTraceOpts} <- TraceOpts].
+    [set_tracing(Mod, ModTraceOpts) || {Mod, ModTraceOpts} <- TraceOpts],
+    ok.
 
-stop_tracer_and_format(FormatOpts) ->
-    ttb:stop({format, FormatOpts}).
+%% @doc Stops the tracer.
+stop(State) ->
+    #state{fetch_dir = Dir, format_opts = FormatOpts} = State,
+    ttb:stop([{fetch_dir, Dir}, {format, FormatOpts}]),
+    ok.
 
-stop_tracer() ->
-    ttb:stop().
+%% @doc Attach to the meck API module.
+attach_meck(State) ->
+    case code:which(meck) of
+        non_existing ->
+            {error, not_available};
+        _ ->
+            #state{trace_opts = TraceOpts} = State,
+            meck:new(meck, [passthrough]),
+            meck:expect(meck, expect, make_expect_3_mock(TraceOpts)),
+            meck:expect(meck, expect, make_expect_4_mock(TraceOpts))
+    end.
 
-expect_3_fun(TraceOpts) ->
+%% @doc Detach from the meck API module.
+detach_meck(_State) ->
+    case code:which(meck) of
+        non_existing ->
+            {error, not_available};
+        _ ->
+            case whereis(meck_util:proc_name(meck)) of
+                undefined ->
+                    {error, not_attached};
+                _ ->
+                    meck:unload(meck)
+            end
+    end.
+
+%% Local functions
+
+get_config(fetch_dir, Config) ->
+    proplists:get_value(fetch_dir, Config, "trace");
+get_config(procs, Config) ->
+    proplists:get_value(procs, Config, all);
+get_config(flags, Config) ->
+    proplists:get_value(flags, Config, [call]);
+get_config(trace_opts, Config) ->
+    TraceOpts = proplists:get_value(trace_opts, Config, default_trace_opts()),
+    Modules = proplists:get_value(modules, Config, []),
+    [merge_trace_opts(Item, TraceOpts) || Item <- Modules];
+get_config(format_opts, Config) ->
+    proplists:get_value(format_opts, Config, []).
+
+default_trace_opts() ->
+    [{match_spec, [{'_', [], [{exception_trace}]}]}].
+
+merge_trace_opts({Mod, TraceOpts}, Default) ->
+    {Mod, TraceOpts ++ Default};
+merge_trace_opts(Mod, Default) ->
+    {Mod, Default}.
+
+make_expect_3_mock(TraceOpts) ->
     fun(Mod, Func, Expect) ->
         call_expect_and_set_tracing([Mod, Func, Expect], TraceOpts)
     end.
 
-expect_4_fun(TraceOpts) ->
+make_expect_4_mock(TraceOpts) ->
     fun(Mod, Func, ArgsSpec, RetSpec) ->
         call_expect_and_set_tracing([Mod, Func, ArgsSpec, RetSpec], TraceOpts)
     end.
 
 call_expect_and_set_tracing(ExpectArgs, TraceOpts) ->
-    Result = apply(meck_meck_original, expect, ExpectArgs),
+    Result = apply(meck_util:original_name(meck), expect, ExpectArgs),
     Mod = hd(ExpectArgs),
     case lists:keyfind(Mod, 1, TraceOpts) of
         {Mod, ModTraceOpts} ->
@@ -163,9 +137,9 @@ call_expect_and_set_tracing(ExpectArgs, TraceOpts) ->
     end,
     Result.
 
-set_tracing(Mod, ModTraceOpts) ->
-    MS = proplists:get_value(match_spec, ModTraceOpts),
-    case proplists:is_defined(trace_locals, ModTraceOpts) of
+set_tracing(Mod, TraceOpts) ->
+    MS = proplists:get_value(match_spec, TraceOpts),
+    case proplists:is_defined(trace_locals, TraceOpts) of
         false ->
             ttb:tp(Mod, MS);
         true ->
