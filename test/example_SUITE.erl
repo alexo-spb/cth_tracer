@@ -25,10 +25,13 @@
 
 
 init_per_suite(Config) ->
+    HandlerConfig = [
+        {out, "./trace.html"},
+        {plantuml, "plantuml.jar"}
+    ],
     TracerConfig = [
         {format_opts, [
-            {out, "trace.puml"},
-            {handler, cth_tracer_puml_format:get_handler()}
+            {handler, cth_tracer_puml_format:get_handler(HandlerConfig)}
         ]},
         {modules, [
             module_a,
