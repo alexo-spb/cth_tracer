@@ -30,6 +30,7 @@
     procs,
     flags,
     trace_opts,
+    trace_mecked,
     fetch_dir,
     format_opts
 }).
@@ -49,6 +50,7 @@ new(Config) ->
         procs = get_config(procs, Config),
         flags = get_config(flags, Config),
         trace_opts = get_config(trace_opts, Config),
+        trace_mecked = get_config(trace_mecked, Config),
         fetch_dir = get_config(fetch_dir, Config),
         format_opts = get_config(format_opts, Config)
     }.
@@ -58,12 +60,14 @@ start(State) ->
     #state{procs = Procs, flags = Flags, trace_opts = TraceOpts} = State,
     ttb:tracer(),
     ttb:p(Procs, Flags),
+    attach_meck_maybe(State),
     [set_tracing(Mod, ModTraceOpts) || {Mod, ModTraceOpts} <- TraceOpts],
     ok.
 
 %% @doc Stops the tracer.
 stop(State) ->
     #state{fetch_dir = Dir, format_opts = FormatOpts} = State,
+    detach_meck_maybe(State),
     ttb:stop([{fetch_dir, Dir}, {format, FormatOpts}]),
     ok.
 
@@ -95,8 +99,6 @@ detach_meck(_State) ->
 
 %% Local functions
 
-get_config(fetch_dir, Config) ->
-    proplists:get_value(fetch_dir, Config, "trace");
 get_config(procs, Config) ->
     proplists:get_value(procs, Config, all);
 get_config(flags, Config) ->
@@ -105,6 +107,10 @@ get_config(trace_opts, Config) ->
     TraceOpts = proplists:get_value(trace_opts, Config, default_trace_opts()),
     Modules = proplists:get_value(modules, Config, []),
     [merge_trace_opts(Item, TraceOpts) || Item <- Modules];
+get_config(trace_mecked, Config) ->
+    proplists:is_defined(trace_mecked, Config);
+get_config(fetch_dir, Config) ->
+    proplists:get_value(fetch_dir, Config, "trace");
 get_config(format_opts, Config) ->
     proplists:get_value(format_opts, Config, []).
 
@@ -115,6 +121,22 @@ merge_trace_opts({Mod, TraceOpts}, Default) ->
     {Mod, TraceOpts ++ Default};
 merge_trace_opts(Mod, Default) ->
     {Mod, Default}.
+
+attach_meck_maybe(State) ->
+    case State#state.trace_mecked of
+        true ->
+            attach_meck(State);
+        false ->
+            ok
+    end.
+
+detach_meck_maybe(State) ->
+    case State#state.trace_mecked of
+        true ->
+            detach_meck(State);
+        false ->
+            ok
+    end.
 
 make_expect_3_mock(TraceOpts) ->
     fun(Mod, Func, Expect) ->

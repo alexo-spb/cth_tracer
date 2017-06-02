@@ -23,28 +23,29 @@
 
 -compile(export_all).
 
-
 init_per_suite(Config) ->
-    HandlerConfig = [
-        {out, "./trace.html"},
-        {plantuml, "plantuml.jar"}
-    ],
+    [{ct_hooks, [cth_tracing]} | Config].
+
+init_per_testcase(_TC, Config) ->
+    Handler = {
+        cth_tracer_puml_format, get_handler,
+        [[{plantuml, "~/devel/plantuml.jar"}]]
+    },
     TracerConfig = [
-        {format_opts, [
-            {handler, cth_tracer_puml_format:get_handler(HandlerConfig)}
-        ]},
+        {out, "example_SUITE.testcase.trace.html"},
+        {handler, Handler},
         {modules, [
             module_a,
             {module_b, [trace_locals]}
         ]}
     ],
-    [{ct_hooks, [cth_tracing]}, {cth_tracing, TracerConfig} | Config].
+    [{cth_tracing, TracerConfig} | Config].
 
-end_per_suite(_Config) ->
+end_per_testcase(_TC, _Config) ->
     ok.
 
 all() ->
     [testcase].
 
-testcase(_Config) ->
+testcase(Config) ->
     module_a:call(ping).

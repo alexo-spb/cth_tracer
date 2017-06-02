@@ -40,8 +40,7 @@
     stacks,
     uml,
     calls,
-    plantuml,
-    out
+    plantuml
 }).
 
 %% API
@@ -58,16 +57,13 @@ init_state(Config) ->
         stacks = dict:new(),
         uml = start_uml(),
         calls = orddict:new(),
-        plantuml = get_config(plantuml, Config),
-        out = get_config(out, Config)
+        plantuml = get_config(plantuml, Config)
     }.
 
 get_config(plantuml, Config) ->
-    proplists:get_value(plantuml, Config, "plantuml.jar");
-get_config(out, Config) ->
-    proplists:get_value(out, Config, "trace.html").
+    proplists:get_value(plantuml, Config, "plantuml.jar").
 
-handle(_Fd, Trace, _TraceInfo, State) ->
+handle(Fd, Trace, _TraceInfo, State) ->
     case Trace of
         {trace_ts, {Pid, _, _}, call, MFA, _TS} ->
             handle_call(Pid, MFA, State);
@@ -76,11 +72,13 @@ handle(_Fd, Trace, _TraceInfo, State) ->
         {trace_ts, {Pid, _, _}, exception_from, MFA, Value, _TS} ->
             handle_exception(Pid, MFA, Value, State);
         end_of_trace ->
-            handle_end(State);
+            handle_end(Fd, State);
         _ ->
             State
     end.
 
+handle_call(_Pid, {_, module_info, _}, State) ->
+    State;
 handle_call(Pid, MFA, State) ->
     #state{idx = Idx, stacks = Stacks0, uml = Uml, calls = Calls} = State,
     {Call, Stacks1} = push_stack(Idx, Pid, MFA, Stacks0),
@@ -91,6 +89,8 @@ handle_call(Pid, MFA, State) ->
         calls = store_call(Calls, Call)
     }.
 
+handle_return(_Pid, {_, module_info, _}, _Value, State) ->
+    State;
 handle_return(Pid, MFA, Value, State) ->
     #state{stacks = Stacks0, uml = Uml, calls = Calls} = State,
     case pop_stack(Pid, MFA, Stacks0) of
@@ -117,11 +117,11 @@ handle_exception(Pid, MFA, Value, State) ->
             }
     end.
 
-handle_end(State) ->
-    #state{uml = Uml, calls = Calls, plantuml = PlantUml, out = Out} = State,
+handle_end(Fd, State) ->
+    #state{uml = Uml, calls = Calls, plantuml = PlantUml} = State,
     SvgHtml = make_svg_html(end_uml(Uml), PlantUml),
     CallsTabHtml = make_calls_tab_html(Calls),
-    write_html(Out, SvgHtml, CallsTabHtml).
+    write_html(Fd, SvgHtml, CallsTabHtml).
 
 start_uml() ->
     format("@startuml~n", []).
@@ -204,11 +204,11 @@ pop_stack(Pid, MFA, Stacks) ->
 matched(#call{mfa = {Mod, Fun, Args}}, MFA) ->
     {Mod, Fun, length(Args)} == MFA.
 
-write_html(Out, SvgHtml, CallsTabHtml) ->
+write_html(Fd, SvgHtml, CallsTabHtml) ->
     Start = html_start(),
     End = html_end(),
     Html = <<Start/binary, SvgHtml/binary, CallsTabHtml/binary, End/binary>>,
-    file:write_file(Out, Html).
+    file:write(Fd, Html).
 
 html_start() ->
     <<"<!DOCTYPE html><html>"

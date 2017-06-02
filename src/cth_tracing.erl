@@ -25,17 +25,12 @@
 
 -module(cth_tracing).
 
--record(state, {
-    config,
-    tracer
-}).
-
 %% ct callbacks
 -export([
     id/1,
     init/2,
-    pre_init_per_testcase/3,
-    post_end_per_testcase/4
+    post_init_per_testcase/4,
+    pre_end_per_testcase/3
 ]).
 
 %% @doc Provide a unique id for this CTH.
@@ -44,43 +39,58 @@ id(_Opts) ->
 
 %% @doc Initiate a common state. Called before any other callback function.
 init(_Id, _Opts) ->
-    {ok, #state{}}.
+    {ok, undefined}.
 
 %% @doc Called before each test case.
-pre_init_per_testcase(_TC, TestConfig, State) ->
-    Config = get_tracer_config(TestConfig),
-    Tracer = cth_tracer:new(Config),
-    attach_meck_maybe(Config, Tracer),
-    cth_tracer:start(Tracer),
-    {TestConfig, State#state{config = Config, tracer = Tracer}}.
+post_init_per_testcase(_TC, TestConfig, _Return, State) ->
+    case make_config(TestConfig) of
+        undefined ->
+            {TestConfig, State};
+        Config ->
+            Tracer = cth_tracer:new(Config),
+            cth_tracer:start(Tracer),
+            {TestConfig, Tracer}
+    end.
 
 %% @doc Called after each test case.
-post_end_per_testcase(_TC, _TestConfig, Return, State) ->
-    #state{config = Config, tracer = Tracer} = State,
-    detach_meck_maybe(Config, Tracer),
+pre_end_per_testcase(_TC, TestConfig, undefined) ->
+    {TestConfig, undefined};
+pre_end_per_testcase(_TC, TestConfig, Tracer) ->
     cth_tracer:stop(Tracer),
-    {Return, State#state{config = undefined, tracer = undefined}}.
+    {TestConfig, undefined}.
 
 %% Local functions
 
-attach_meck_maybe(Config, Tracer) ->
-    case get_config(trace_mecked, Config) of
-        true ->
-            cth_tracer:attach_meck(Tracer);
-        false ->
-            ok
+make_config(TestConfig) ->
+    case proplists:get_value(cth_tracing, TestConfig) of
+        undefined ->
+            undefined;
+        HookConfig ->
+            make_config(HookConfig, [])
     end.
 
-detach_meck_maybe(Config, Tracer) ->
-    case get_config(trace_mecked, Config) of
-        true ->
-            cth_tracer:detach_meck(Tracer);
-        false ->
-            ok
-    end.
+make_config([{procs, _} = H | T], Config) ->
+    make_config(T, [H | Config]);
+make_config([{flags, _} = H | T], Config) ->
+    make_config(T, [H | Config]);
+make_config([{trace_opts, _} = H | T], Config) ->
+    make_config(T, [H | Config]);
+make_config([trace_mecked = H | T], Config) ->
+    make_config(T, [H | Config]);
+make_config([{modules, _} = H | T], Config) ->
+    make_config(T, [H | Config]);
+make_config([{out, _} = H | T], Config) ->
+    Opts = proplists:get_value(format_opts, Config, []),
+    Tuple = {format_opts, [H | Opts]},
+    make_config(T, lists:keystore(format_opts, 1, Config, Tuple));
+make_config([{handler, {M, F, A}} | T], Config) ->
+    Opts = proplists:get_value(format_opts, Config, []),
+    Tuple = {format_opts, [{handler, apply(M, F, A)} | Opts]},
+    make_config(T, lists:keystore(format_opts, 1, Config, Tuple));
+make_config([_ | T], Config) ->
+    make_config(T, Config);
+make_config([], []) ->
+    undefined;
+make_config([], Config) ->
+    Config.
 
-get_config(trace_mecked, Config) ->
-    proplists:is_defined(trace_mecked, Config).
-
-get_tracer_config(Config) ->
-    proplists:get_value(cth_tracing, Config, []).
