@@ -32,7 +32,9 @@
     pid,
     from,
     mfa,
-    result
+    result,
+    start_ts,
+    end_ts
 }).
 
 -record(state, {
@@ -65,23 +67,23 @@ get_config(plantuml, Config) ->
 
 handle(Fd, Trace, _TraceInfo, State) ->
     case Trace of
-        {trace_ts, {Pid, _, _}, call, MFA, _TS} ->
-            handle_call(Pid, MFA, State);
-        {trace_ts, {Pid, _, _}, return_from, MFA, Value, _TS} ->
-            handle_return(Pid, MFA, Value, State);
-        {trace_ts, {Pid, _, _}, exception_from, MFA, Value, _TS} ->
-            handle_exception(Pid, MFA, Value, State);
+        {trace_ts, {Pid, _, _}, call, MFA, TS} ->
+            handle_call(Pid, MFA, TS, State);
+        {trace_ts, {Pid, _, _}, return_from, MFA, Value, TS} ->
+            handle_return(Pid, MFA, Value, TS, State);
+        {trace_ts, {Pid, _, _}, exception_from, MFA, Value, TS} ->
+            handle_exception(Pid, MFA, Value, TS, State);
         end_of_trace ->
             handle_end(Fd, State);
         _ ->
             State
     end.
 
-handle_call(_Pid, {_, module_info, _}, State) ->
+handle_call(_Pid, {_, module_info, _}, _TS, State) ->
     State;
-handle_call(Pid, MFA, State) ->
+handle_call(Pid, MFA, TS, State) ->
     #state{idx = Idx, stacks = Stacks0, uml = Uml, calls = Calls} = State,
-    {Call, Stacks1} = push_stack(Idx, Pid, MFA, Stacks0),
+    {Call, Stacks1} = push_stack(Idx, Pid, MFA, TS, Stacks0),
     State#state{
         idx = Idx + 1,
         stacks = Stacks1,
@@ -89,9 +91,9 @@ handle_call(Pid, MFA, State) ->
         calls = store_call(Calls, Call)
     }.
 
-handle_return(_Pid, {_, module_info, _}, _Value, State) ->
+handle_return(_Pid, {_, module_info, _}, _Value, _TS, State) ->
     State;
-handle_return(Pid, MFA, Value, State) ->
+handle_return(Pid, MFA, Value, TS, State) ->
     #state{stacks = Stacks0, uml = Uml, calls = Calls} = State,
     case pop_stack(Pid, MFA, Stacks0) of
         {undefined, Stacks1} ->
@@ -100,11 +102,11 @@ handle_return(Pid, MFA, Value, State) ->
             State#state{
                 stacks = Stacks1,
                 uml = append_uml_return(Uml, Call),
-                calls = store_call(Calls, update_return(Call, Value))
+                calls = store_call(Calls, update_return(Call, Value, TS))
             }
     end.
 
-handle_exception(Pid, MFA, Value, State) ->
+handle_exception(Pid, MFA, Value, TS, State) ->
     #state{stacks = Stacks0, uml = Uml, calls = Calls} = State,
     case pop_stack(Pid, MFA, Stacks0) of
         {undefined, Stacks1} ->
@@ -113,7 +115,7 @@ handle_exception(Pid, MFA, Value, State) ->
             State#state{
                 stacks = Stacks1,
                 uml = append_uml_exception(Uml, Call),
-                calls = store_call(Calls, update_exception(Call, Value))
+                calls = store_call(Calls, update_exception(Call, Value, TS))
             }
     end.
 
@@ -166,20 +168,20 @@ format(Format, Args) ->
 store_call(Calls, #call{id = Id} = Call) ->
     orddict:store(Id, Call, Calls).
 
-update_return(Call, Value) ->
-    Call#call{result = #return{value = Value}}.
+update_return(Call, Value, TS) ->
+    Call#call{result = #return{value = Value}, end_ts = TS}.
 
-update_exception(Call, Value) ->
-    Call#call{result = #exception{value = Value}}.
+update_exception(Call, Value, TS) ->
+    Call#call{result = #exception{value = Value}, end_ts = TS}.
 
-push_stack(Idx, Pid, MFA, Stacks) ->
+push_stack(Idx, Pid, MFA, TS, Stacks) ->
     case dict:find(Pid, Stacks) of
         {ok, Stack} ->
             #call{mfa = {Mod, _, _}} = hd(Stack),
-            Call = #call{id = Idx, pid = Pid, from = Mod, mfa = MFA},
+            Call = #call{id = Idx, pid = Pid, from = Mod, mfa = MFA, start_ts = TS},
             {Call, dict:store(Pid, [Call | Stack], Stacks)};
         error ->
-            Call = #call{id = Idx, pid = Pid, mfa = MFA},
+            Call = #call{id = Idx, pid = Pid, mfa = MFA, start_ts = TS},
             {Call, dict:store(Pid, [Call], Stacks)}
     end.
 
@@ -213,13 +215,20 @@ write_html(Fd, SvgHtml, CallsTabHtml) ->
 html_start() ->
     <<"<!DOCTYPE html><html>"
       "<style>"
-          ".calls-tab {border-collapse: collapse; width: 100%;}"
-          ".calls-tab th {text-align: center; border-top: 1px solid black; border-bottom: 1px solid black; background: #DDDDDD;}"
-          ".calls-tab tr:nth-child(odd) table {background: #E8E8E8;}"
-          ".calls-tab tr table.exception {background: #FFCCCC;}"
-          ".call-tab {border-collapse: collapse;}"
-          ".call-tab td {vertical-align: top; font-family: Sans-serif; font-size: 13px;}"
-          ".call-tab td:nth-child(2) {width: 100%;}"
+          ".calls-tab {border-collapse: collapse; width: 100%;} "
+          ".calls-tab th {text-align: center; border-top: 1px solid black; border-bottom: 1px solid black; background: #DDDDDD;} "
+          ".calls-tab tr:nth-child(8n-2) {background: #E8E8E8;} "
+          ".calls-tab tr:nth-child(8n-1) {background: #E8E8E8;} "
+          ".calls-tab tr:nth-child(8n+0) {background: #E8E8E8;} "
+          ".calls-tab tr:nth-child(8n+1) {background: #E8E8E8;}"
+          ".calls-tab tr td:first-child {width:1%;} "
+          ".calls-tab td.exception {background: #FFCCCC;} "
+          ".calls-tab td {vertical-align: top; font-family: Sans-serif; font-size: 13px;} "
+          ".calls-tab tr:nth-child(4n-2) td:nth-child(1) {border-right: 1px solid #C0C0C0;} "
+          ".calls-tab tr:nth-child(4n-2) td:nth-child(2) {border-right: 1px solid #C0C0C0;} "
+          ".calls-tab tr:nth-child(4n-1) td:nth-child(1) {border-right: 1px solid #C0C0C0;} "
+          ".calls-tab tr:nth-child(4n-0) td:nth-child(1) {border-right: 1px solid #C0C0C0;} "
+          ".calls-tab tr:nth-child(4n+1) td:nth-child(1) {border-right: 1px solid #C0C0C0;}"
       "</style>"
       "<body>">>.
 
@@ -259,31 +268,34 @@ make_calls_tab_html(Calls) ->
     iolist_to_binary(xmerl:export_simple_content([Tab], xmerl_xml)).
 
 make_calls_head() ->
-    Tags = [{colspan, "2"}, {class, "calls-tab-head"}],
+    Tags = [{colspan, "3"}, {class, "calls-tab-head"}],
     {th, Tags, ["Call Details"]}.
 
 make_calls_rows(Calls) ->
-    Fun = fun(_Id, Call, Acc) -> [make_calls_row(Call) | Acc] end,
-    lists:reverse(orddict:fold(Fun, [], Calls)).
+    lists:reverse(orddict:fold(fun make_call_rows/3, [], Calls)).
 
-make_calls_row(Call) ->
+make_call_rows(_Id, Call, Acc) ->
     #call{id = Id, pid = Pid, from = From, mfa = MFA, result = Result} = Call,
     {Mod, Fun, Args} = MFA, Arity = length(Args),
     IdText = [format("~5..0B", [Id])],
     CallText = [format("~p ~s -> ~s:~s/~p", [Pid, From, Mod, Fun, Arity])],
+    {Ms, Us} = duration(Call),
+    DurationText = [format("~p.~pms", [Ms, Us])],
     ArgsText = [format("~p", [Args])],
     ResultType = atom_to_list(type(Result)),
     ResultText = [format("~p", [value(Result)])],
-    {tr, [{id, [<<"call">> | IdText]}], [
-        {td, [
-            {table, [{class, "call-tab " ++ ResultType}], [
-                {tr, [{td, [{rowspan, "4"}], [IdText]}]},
-                {tr, [{td, ["call"]}, {td, [CallText]}]},
-                {tr, [{td, ["args"]}, {td, [ArgsText]}]},
-                {tr, [{td, [ResultType]}, {td, [ResultText]}]}
-            ]}
-        ]}
-    ]}.
+    IdTags = [{id, [<<"call">> | IdText]}, {rowspan, "4"}, {class, ResultType}],
+    R1 = {tr, [{td, IdTags, [IdText]}, {td, ["call"]}, {td, [CallText]}]},
+    R2 = {tr, [{td, ["duration"]}, {td, [DurationText]}]},
+    R3 = {tr, [{td, ["arguments"]}, {td, [ArgsText]}]},
+    R4 = {tr, [{td, [ResultType]}, {td, [ResultText]}]},
+    [R4, R3, R2, R1 | Acc].
+
+duration(#call{start_ts = StartTS, end_ts = EndTS}) ->
+    Diff = timer:now_diff(EndTS, StartTS),
+    Us = Diff rem 1000,
+    Ms = Diff div 1000,
+    {Ms, Us}.
 
 type(Tuple) -> element(1, Tuple).
 
