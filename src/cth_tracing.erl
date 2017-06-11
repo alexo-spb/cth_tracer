@@ -29,9 +29,15 @@
 -export([
     id/1,
     init/2,
+    post_init_per_suite/4,
     post_init_per_testcase/4,
     pre_end_per_testcase/3
 ]).
+
+-record(state, {
+    suite :: atom(),
+    tracer
+}).
 
 %% @doc Provide a unique id for this CTH.
 id(_Opts) ->
@@ -41,32 +47,58 @@ id(_Opts) ->
 init(_Id, _Opts) ->
     {ok, undefined}.
 
+%% @doc Called after init_per_suite.
+post_init_per_suite(Suite, Config, Return, _) ->
+     State = init_state(Suite),
+     {Return, State}.
+
 %% @doc Called before each test case.
-post_init_per_testcase(_TC, TestConfig, _Return, State) ->
-    case make_config(TestConfig) of
-        undefined ->
-            {TestConfig, State};
-        Config ->
-            Tracer = cth_tracer:new(Config),
-            cth_tracer:start(Tracer),
-            {TestConfig, Tracer}
-    end.
+post_init_per_testcase(TC, TestConfig, _Return, State0) ->
+    State1 = start_tracer(TC, TestConfig, State0),
+    {TestConfig, State1}.
 
 %% @doc Called after each test case.
-pre_end_per_testcase(_TC, TestConfig, undefined) ->
-    {TestConfig, undefined};
-pre_end_per_testcase(_TC, TestConfig, Tracer) ->
-    cth_tracer:stop(Tracer),
-    {TestConfig, undefined}.
+pre_end_per_testcase(_TC, TestConfig, State0) ->
+    State1 = stop_tracer(State0),
+    {TestConfig, State1}.
 
 %% Local functions
 
-make_config(TestConfig) ->
+init_state(Suite) ->
+    #state{suite = Suite}.
+
+start_tracer(TC, TestConfig, State) ->
+    #state{suite = Suite} = State,
+    case make_config(Suite, TC, TestConfig) of
+        [] ->
+            State;
+        Config ->
+            Tracer = cth_tracer:new(Config),
+            cth_tracer:start(Tracer),
+            State#state{tracer = Tracer}
+    end.
+
+stop_tracer(State) ->
+    #state{tracer = Tracer} = State,
+    case Tracer of
+        undefined ->
+            State;
+        _ ->
+            cth_tracer:stop(Tracer),
+            State#state{tracer = undefined}
+    end.
+
+make_config(Suite, TC, TestConfig) ->
     case proplists:get_value(cth_tracing, TestConfig) of
         undefined ->
-            undefined;
+            [];
         HookConfig ->
-            make_config(HookConfig, [])
+            case make_config(HookConfig, []) of
+                [] ->
+                    [];
+                Config ->
+                    prefix_config(Suite, TC, Config)
+            end
     end.
 
 make_config([{procs, _} = H | T], Config) ->
@@ -94,3 +126,19 @@ make_config([], []) ->
 make_config([], Config) ->
     Config.
 
+prefix_config(Suite, TC, Config) ->
+    Prefix = make_prefix(Suite, TC),
+    prefix_out(Prefix, prefix_fetch_dir(Prefix, Config)).
+
+make_prefix(Suite, TC) ->
+    lists:concat([Suite, ".", TC, "."]).
+
+prefix_fetch_dir(Prefix, Config) ->
+    FetchDir = proplists:get_value(fetch_dir, Config, "trace"),
+    lists:keystore(fetch_dir, 1, Config, {fetch_dir, Prefix ++ FetchDir}).
+
+prefix_out(Prefix, Config) ->
+    Opts0 = proplists:get_value(format_opts, Config, []),
+    Out = proplists:get_value(out, Opts0, "out"),
+    Opts1 = lists:keystore(out, 1, Opts0, {out, Prefix ++ Out}),
+    lists:keystore(format_opts, 1, Config, {format_opts, Opts1}).

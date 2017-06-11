@@ -31,18 +31,15 @@ init_per_testcase(_TC, Config) ->
         cth_tracer_puml_format, get_handler,
         [[{plantuml, "~/devel/plantuml.jar"}]]
     },
-    TracerConfig = [
-        {out, "example_SUITE.testcase.trace.html"},
+    TracingConfig = [
+        {out, "trace.html"},
         {handler, Handler},
         {modules, [
             module_a,
             {module_b, [trace_locals]}
         ]}
     ],
-    [{cth_tracing, TracerConfig} | Config].
-
-end_per_testcase(_TC, _Config) ->
-    ok.
+    [{cth_tracing, TracingConfig} | Config].
 
 all() ->
     [testcase].
